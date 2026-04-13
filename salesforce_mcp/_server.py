@@ -4,7 +4,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
-from salesforce_mcp.salesforce import SalesforceError, get_client
+from salesforce_mcp.salesforce import get_client
 
 mcp = FastMCP("Salesforce", json_response=True)
 
@@ -25,11 +25,7 @@ def run_soql(query: str) -> str:
         client = get_client()
         result = client.run_soql(query)
         return json.dumps(result, default=str)
-    except SalesforceError as e:
-        return _tool_error(str(e))
-    except FileNotFoundError as e:
-        return _tool_error(str(e))
-    except ValueError as e:
+    except Exception as e:
         return _tool_error(str(e))
 
 
@@ -43,11 +39,7 @@ def describe_sobject(sobject: str) -> str:
         client = get_client()
         result = client.describe_sobject(sobject.strip())
         return json.dumps(result, default=str)
-    except SalesforceError as e:
-        return _tool_error(str(e))
-    except FileNotFoundError as e:
-        return _tool_error(str(e))
-    except ValueError as e:
+    except Exception as e:
         return _tool_error(str(e))
 
 
@@ -61,9 +53,5 @@ def list_objects() -> str:
         client = get_client()
         result = client.list_objects()
         return json.dumps(result, default=str)
-    except SalesforceError as e:
-        return _tool_error(str(e))
-    except FileNotFoundError as e:
-        return _tool_error(str(e))
-    except ValueError as e:
+    except Exception as e:
         return _tool_error(str(e))

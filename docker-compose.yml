@@ -1,0 +1,13 @@
+services:
+  salesforce-mcp:
+    build: .
+    ports:
+      - "${MCP_PORT:-8765}:8765"
+    environment:
+      - SALESFORCE_CLIENT_ID
+      - SALESFORCE_CLIENT_SECRET
+      - SALESFORCE_LOGIN_HOST=${SALESFORCE_LOGIN_HOST:-login.salesforce.com}
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8765
+      - MCP_API_KEY
+    restart: unless-stopped

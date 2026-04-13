@@ -1,109 +1,151 @@
 # Salesforce MCP Server (Read-Only)
 
-A local MCP server that connects to **Claude Desktop** via stdio and provides **read-only** access to your Salesforce org: run SOQL queries, describe sObjects (standard and custom), and list all objects. Authentication uses **OAuth 2.0** (Web Server flow). **No writes or DML** are allowed—only SELECT queries and describe/list APIs.
+An MCP server that provides **read-only** access to your Salesforce org: run SOQL queries, describe sObjects, and list all objects. Authentication uses the **OAuth 2.0 Client Credentials** flow. **No writes or DML** are allowed -- only SELECT queries and describe/list APIs.
+
+Supports two transport modes:
+- **stdio** -- for local use with Claude Desktop
+- **Streamable HTTP** -- for remote deployment (Docker, Azure Container Apps, managed Claude agents)
 
 ## Requirements
 
 - Python 3.10+
-- A Salesforce **Connected App** (see below)
-- Claude Desktop
+- A Salesforce **Connected App** configured for the Client Credentials flow
 
-## Connected App (Salesforce)
+## Connected App Setup (Salesforce)
 
-1. In Salesforce: **Setup → App Manager → New Connected App** (or edit an existing one).
-2. Enable **OAuth 2.0** and **OAuth 2.0 Web Server Flow**.
-3. Set **Callback URL** to: `http://localhost:8765/callback` (or the port you use for auth).
-4. Under **Selected OAuth Scopes**, add at least:
-   - **Access and manage your data (api)**
-   - **Perform requests at any time (refresh_token)**
-5. Enable **Allow refresh token**.
-6. Save and note your **web credentials** (OAuth credentials):
-   - **Consumer Key** — use as Client ID below
-   - **Consumer Secret** — use as Client Secret below  
-   (In Setup they may appear under "Consumer Key" / "Consumer Secret" or "Web credentials".)
+1. In Salesforce: **Setup > App Manager > New Connected App**.
+2. Enable **OAuth Settings**.
+3. Under **Selected OAuth Scopes**, add **Access and manage your data (api)**.
+4. Enable **Client Credentials Flow**.
+5. Save and note your **Consumer Key** and **Consumer Secret**.
+6. Under **Manage > Edit Policies**, set the **Client Credentials** run-as user.
 
-## One-Time OAuth Login
+## Environment Variables
 
-Before using the MCP server, run the auth script once so it can save your tokens. Set credentials as environment variables (these same values go in your Claude Desktop config):
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SALESFORCE_CLIENT_ID` | Yes | Connected App Consumer Key |
+| `SALESFORCE_CLIENT_SECRET` | Yes | Connected App Consumer Secret |
+| `SALESFORCE_LOGIN_HOST` | No | `login.salesforce.com` (default) or your My Domain host |
+| `MCP_HOST` | No | Server bind address (default: `0.0.0.0`) |
+| `MCP_PORT` | No | Server port (default: `8765`) |
+| `MCP_API_KEY` | No | API key for Bearer token auth on the `/mcp` endpoint. When unset, auth is disabled. |
+| `MCP_ALLOWED_HOSTS` | No | Comma-separated allowed Host headers, or `*` to disable DNS rebinding protection (recommended for cloud deployments with API key auth). |
+| `MCP_TRANSPORT` | No | Transport mode when no CLI arg is given (`stdio` or `streamable-http`, default: `stdio`). |
 
-```bash
-export SALESFORCE_CLIENT_ID="your_consumer_key"
-export SALESFORCE_CLIENT_SECRET="your_consumer_secret"
-
-python -m salesforce_mcp.auth
-```
-
-Tokens are saved to `tokens.json` in the project root by default. To use a custom path:
+## Running Locally (stdio)
 
 ```bash
-export SALESFORCE_MCP_TOKEN_FILE="custom/path/tokens.json"   # relative to project root
-python -m salesforce_mcp.auth
+pip install .
+python -m salesforce_mcp
 ```
 
-**Options:**
+This starts the server in stdio mode, suitable for Claude Desktop.
 
-- `--port 8766` — Use a different callback port (must match the callback URL in your Connected App).
-- `--sandbox` — Use `test.salesforce.com` (sandbox) instead of production.
-
-## Claude Desktop Configuration
-
-Add the MCP server to your Claude Desktop config. All credentials are stored in the `env` section.
-
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+### Claude Desktop Configuration
 
 ```json
 {
   "mcpServers": {
     "salesforce": {
-      "command": "uv",
-      "args": ["run", "--project", "salesforce-mcp", "-m", "salesforce_mcp"],
+      "command": "python",
+      "args": ["-m", "salesforce_mcp"],
       "env": {
-        "SALESFORCE_CLIENT_ID": "your_consumer_key",
-        "SALESFORCE_CLIENT_SECRET": "your_consumer_secret",
-        "SALESFORCE_MCP_TOKEN_FILE": "tokens.json"
+        "SALESFORCE_CLIENT_ID": "<your_consumer_key>",
+        "SALESFORCE_CLIENT_SECRET": "<your_consumer_secret>",
+        "SALESFORCE_LOGIN_HOST": "<your_login_host>"
       }
     }
   }
 }
 ```
 
-> **Note:** `SALESFORCE_MCP_TOKEN_FILE` defaults to `tokens.json` (relative to the project root). You only need to set it if you want a different location. Relative paths are resolved from the project root; absolute paths are used as-is.
+## Running Locally (Streamable HTTP)
 
-Restart Claude Desktop after changing the config. You should see the Salesforce tools (e.g. run_soql, describe_sobject, list_objects) available.
+```bash
+python -m salesforce_mcp streamable-http
+```
 
-## Environment Variables
+The server starts on `http://0.0.0.0:8765/mcp` with a health check at `/health`.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SALESFORCE_CLIENT_ID` or `SALESFORCE_CONSUMER_KEY` | Yes (for auth & refresh) | Connected App **Consumer Key** (web credentials) |
-| `SALESFORCE_CLIENT_SECRET` or `SALESFORCE_CONSUMER_SECRET` | Yes (for auth & refresh) | Connected App **Consumer Secret** (web credentials) |
-| `SALESFORCE_MCP_TOKEN_FILE` | No | Token file path (default: `tokens.json` relative to project root) |
-| `SALESFORCE_CALLBACK_PORT` | No | Callback port for auth (default: 8765) |
+## Running with Docker
 
-Client ID and secret are stored in both the token file and the Claude Desktop config `env`. The server reads them from env during token refresh.
+```bash
+docker compose up --build
+```
+
+Pass credentials via a `.env` file in the project root. The Dockerfile runs the server in Streamable HTTP mode by default.
+
+## Deploying to Azure Container Apps
+
+1. Build and push the Docker image to your Azure Container Registry:
+
+   ```bash
+   az acr login --name <your_acr>
+   docker build --platform linux/amd64 -t <your_acr>.azurecr.io/salesforce-mcp:latest .
+   docker push <your_acr>.azurecr.io/salesforce-mcp:latest
+   ```
+
+2. Create the container app:
+
+   ```bash
+   az containerapp create \
+     --name salesforce-mcp \
+     --resource-group <your_rg> \
+     --environment <your_cae> \
+     --image <your_acr>.azurecr.io/salesforce-mcp:latest \
+     --registry-server <your_acr>.azurecr.io \
+     --target-port 8765 \
+     --ingress external \
+     --min-replicas 0 \
+     --max-replicas 3 \
+     --cpu 0.25 \
+     --memory 0.5Gi \
+     --env-vars \
+       SALESFORCE_CLIENT_ID=secretref:salesforce-client-id \
+       SALESFORCE_CLIENT_SECRET=secretref:salesforce-client-secret \
+       SALESFORCE_LOGIN_HOST=<your_login_host> \
+       MCP_HOST=0.0.0.0 \
+       MCP_PORT=8765 \
+       MCP_API_KEY=secretref:mcp-api-key \
+       MCP_ALLOWED_HOSTS="*" \
+     --secrets \
+       salesforce-client-id="<your_client_id>" \
+       salesforce-client-secret="<your_client_secret>" \
+       mcp-api-key="<your_api_key>"
+   ```
+
+3. Connect your MCP client to the deployed endpoint:
+
+   ```json
+   {
+     "mcpServers": {
+       "salesforce": {
+         "type": "streamable-http",
+         "url": "https://<your_fqdn>/mcp",
+         "headers": {
+           "Authorization": "Bearer <your_api_key>"
+         }
+       }
+     }
+   }
+   ```
+
+## API Key Authentication
+
+When `MCP_API_KEY` is set, all requests to `/mcp` must include an `Authorization: Bearer <key>` header. Requests without a valid key receive a `401 Unauthorized` response.
+
+The `/health` endpoint is always unauthenticated so that platform health probes (Azure, Docker, etc.) work without credentials.
+
+When `MCP_API_KEY` is not set, all requests pass through without auth -- suitable for local development.
 
 ## Tools (Read-Only)
 
 | Tool | Description |
 |------|-------------|
-| **run_soql** | Execute a SOQL query. Only **SELECT** queries are allowed; INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected. Returns `records`, `totalSize`, `done`, and optionally `nextRecordsUrl`. |
-| **describe_sobject** | Describe one sObject (standard or custom): fields, labels, types, relationships. |
-| **list_objects** | List all sObjects in the org (Describe Global): name, label, custom flag, etc. |
-
-No create/update/delete tools are exposed; the server is read-only.
-
-## Install (Development)
-
-From the project root:
-
-```bash
-pip install -e .
-# or
-uv pip install -e .
-```
-
-Then run auth once and add the server to Claude Desktop as above.
+| **run_soql** | Execute a SOQL SELECT query. INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected. |
+| **describe_sobject** | Describe one sObject: fields, labels, types, relationships. |
+| **list_objects** | List all sObjects in the org: name, label, custom flag. |
 
 ## License
 
