@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from salesforce_mcp.salesforce import get_client
 
-mcp = FastMCP("Salesforce", json_response=True)
+mcp = FastMCP("Salesforce", json_response=True, stateless_http=True)
 
 
 def _tool_error(message: str) -> str:
