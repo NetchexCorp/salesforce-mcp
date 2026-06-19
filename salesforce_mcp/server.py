@@ -8,6 +8,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from salesforce_mcp._server import mcp
+from salesforce_mcp.auth import _client_id, _client_secret
 from salesforce_mcp.middleware import ApiKeyMiddleware
 
 
@@ -36,6 +37,9 @@ def run() -> None:
 
     starlette_app = mcp.streamable_http_app()
     app = ApiKeyMiddleware(starlette_app)
+
+    _client_id()
+    _client_secret()
 
     config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server = uvicorn.Server(config)
