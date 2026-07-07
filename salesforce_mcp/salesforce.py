@@ -6,7 +6,7 @@ import requests
 
 from salesforce_mcp.auth import obtain_access_token
 
-API_VERSION = "v59.0"
+API_VERSION = "v62.0"
 
 # DML keywords that must not appear in SOQL (read-only)
 _FORBIDDEN_SOQL = re.compile(
@@ -61,6 +61,36 @@ class SalesforceClient:
                 body=resp.text,
             )
         return resp.json()
+
+    def _post(self, path: str, payload: dict) -> dict:
+        """POST JSON to a path under the API base; re-auth on 401 and retry once."""
+        url = f"{self._api_base}{path}"
+        resp = requests.post(url, headers=self._headers(), json=payload, timeout=60)
+        if resp.status_code == 401:
+            self._reauth()
+            url = f"{self._api_base}{path}"
+            resp = requests.post(url, headers=self._headers(), json=payload, timeout=60)
+        if resp.status_code >= 400:
+            raise SalesforceError(
+                f"Salesforce API error: {resp.status_code}",
+                status_code=resp.status_code,
+                body=resp.text,
+            )
+        return resp.json()
+
+    def create_report(self, report_metadata: dict) -> dict:
+        """
+        Create a report via the Analytics REST API (POST /analytics/reports).
+
+        report_metadata is the value of the "reportMetadata" key: it must include at least
+        name, reportType, reportFormat, and typically detailColumns and folderId.
+        """
+        if not isinstance(report_metadata, dict) or not report_metadata:
+            raise SalesforceError("reportMetadata is required and must be a non-empty object.")
+        for required in ("name", "reportType", "reportFormat"):
+            if not report_metadata.get(required):
+                raise SalesforceError(f"reportMetadata.{required} is required.")
+        return self._post("/analytics/reports", {"reportMetadata": report_metadata})
 
     def run_soql(self, query: str) -> dict:
         """Execute a SOQL query (SELECT only)."""

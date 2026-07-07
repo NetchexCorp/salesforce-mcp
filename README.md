@@ -1,6 +1,8 @@
-# Salesforce MCP Server (Read-Only)
+# Salesforce MCP Server
 
-An MCP server that provides **read-only** access to your Salesforce org: run SOQL queries, describe sObjects, and list all objects. Authentication uses the **OAuth 2.0 Client Credentials** flow. **No writes or DML** are allowed -- only SELECT queries and describe/list APIs.
+An MCP server for your Salesforce org: run SOQL queries, describe sObjects, list all objects, and create reports. Authentication uses the **OAuth 2.0 Client Credentials** flow.
+
+Data access is **read-only** -- SOQL is restricted to `SELECT` (INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected). The one write operation is **create_report**, which is gated to run only when a report is explicitly requested (see [Tools](#tools)).
 
 Supports two transport modes:
 - **stdio** -- for local use with Claude Desktop
@@ -139,13 +141,30 @@ The `/health` endpoint is always unauthenticated so that platform health probes 
 
 When `MCP_API_KEY` is not set, all requests pass through without auth -- suitable for local development.
 
-## Tools (Read-Only)
+## Tools
 
 | Tool | Description |
 |------|-------------|
 | **run_soql** | Execute a SOQL SELECT query. INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected. |
 | **describe_sobject** | Describe one sObject: fields, labels, types, relationships. |
 | **list_objects** | List all sObjects in the org: name, label, custom flag. |
+| **create_report** | Create a new report via the Analytics REST API (`POST /analytics/reports`). **Write operation** -- called only when the user explicitly asks to create a report. |
+
+### create_report
+
+Creates a new report asset in the org. Pass `report_metadata` as the object placed under the request's `reportMetadata` key (`name`, `reportType`, and `reportFormat` are required; `detailColumns` and `folderId` are typical):
+
+```json
+{
+  "name": "Clay Audience Report",
+  "reportType": { "type": "AccountList" },
+  "reportFormat": "TABULAR",
+  "detailColumns": ["ACCOUNT.NAME", "ACCOUNT.URL", "ACCOUNT.EMPLOYEES"],
+  "folderId": "00lXXXXXXXXXXXX"
+}
+```
+
+This requires the Connected App's run-as user to have permission to create reports in the target folder.
 
 ## License
 

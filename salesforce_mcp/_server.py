@@ -1,6 +1,7 @@
 """MCP FastMCP app and tool definitions (used by server.run)."""
 
 import json
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -52,6 +53,39 @@ def list_objects() -> str:
     try:
         client = get_client()
         result = client.list_objects()
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def create_report(report_metadata: dict[str, Any]) -> str:
+    """
+    Create a NEW report in Salesforce via the Analytics REST API
+    (POST /services/data/<version>/analytics/reports).
+
+    IMPORTANT: Only call this tool when the user has EXPLICITLY asked to create a report in
+    Salesforce. This is a write operation that creates a new report asset in the org. Do not
+    call it to read, query, or explore data (use run_soql / describe_sobject / list_objects for
+    that), and never call it speculatively.
+
+    Pass `report_metadata` as the object that goes under the request's "reportMetadata" key.
+    Required fields: name, reportType, reportFormat. Typically also detailColumns and folderId.
+
+    Example report_metadata:
+        {
+            "name": "Clay Audience Report",
+            "reportType": {"type": "AccountList"},
+            "reportFormat": "TABULAR",
+            "detailColumns": ["ACCOUNT.NAME", "ACCOUNT.URL", "ACCOUNT.EMPLOYEES"],
+            "folderId": "00lXXXXXXXXXXXX"
+        }
+
+    Returns the created report definition (including its new report Id) as JSON.
+    """
+    try:
+        client = get_client()
+        result = client.create_report(report_metadata)
         return json.dumps(result, default=str)
     except Exception as e:
         return _tool_error(str(e))
