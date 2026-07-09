@@ -147,8 +147,9 @@ def create_report(report_metadata: dict[str, Any]) -> str:
 
     Pass `report_metadata` as the object that goes under the request's "reportMetadata" key.
     Required fields: name, reportType, reportFormat (TABULAR | SUMMARY | MATRIX). Typically
-    also detailColumns. If folderId is omitted, the report is created in the default public
-    'Claude Reports' folder.
+    also detailColumns. reportType may be the object {"type": "<Name>"} or a bare string
+    "<Name>" (either is accepted). If folderId is omitted, the report is created in the
+    default public 'Claude Reports' folder.
 
     Filters: reportFilters is a list of {"column", "operator", "value"}. For multiple
     picklist values (OR), pass ONE filter with comma-separated values, e.g.
@@ -158,7 +159,8 @@ def create_report(report_metadata: dict[str, Any]) -> str:
     Groupings (SUMMARY/MATRIX only): groupingsDown / groupingsAcross is a list of
     {"name": <column>, "sortOrder": "Asc"|"Desc", "dateGranularity": <granularity>}.
     dateGranularity (date columns only): Day, Week, Month, Quarter, Year,
-    FiscalQuarter, FiscalYear. TABULAR reports must NOT have groupings.
+    FiscalQuarter, FiscalYear. Also MonthInYear (a Jan-Dec month-of-year axis that folds
+    all years together). TABULAR reports must NOT have groupings.
 
     Aggregates: aggregates is a list of strings: "s!<COLUMN>" sum, "a!<COLUMN>" average,
     "m!<COLUMN>" min, "x!<COLUMN>" max (numeric columns only), plus "RowCount".
@@ -166,6 +168,25 @@ def create_report(report_metadata: dict[str, Any]) -> str:
         "groupingsDown": [{"name": "CREATED_DATE", "sortOrder": "Asc",
                            "dateGranularity": "Month"}],
         "aggregates": ["s!AMOUNT", "RowCount"], ...}
+
+    Row-level formulas: customDetailFormula defines per-row formula columns, keyed by
+    name (conventionally CDF1, CDF2, ...). Each key MUST also be listed in detailColumns
+    to appear, and once listed "s!CDF1" (etc.) becomes a valid aggregate. Enum values are
+    LOWERCASE -- dataType: double | string | date | datetime; formulaType: number | text |
+    date | datetime (e.g. "Double", "currency", "Number" cause JSON_PARSER_ERROR). Example:
+        "customDetailFormula": {
+            "CDF1": {
+                "label": "Expected Churn ARR",
+                "description": "Hierarchy ARR weighted by churn likelihood",
+                "formula": "Account.Hierarchy_ARR__c * IF(...)",
+                "dataType": "double",
+                "formulaType": "number",
+                "decimalPlaces": 0
+            }
+        }
+    Bucket fields (buckets) are similarly payload-local; their developerName may be used in
+    detailColumns/groupings/filters. Both formula and bucket columns are whitelisted by the
+    validator even though describe_report_type does not list them.
 
     Scope and date range (the "report looks empty" trap): Salesforce defaults new reports
     to the author's own records ("scope": "user") and a created-this-week date window,

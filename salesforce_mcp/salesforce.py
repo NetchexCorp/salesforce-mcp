@@ -202,6 +202,8 @@ class SalesforceClient:
         for required in ("name", "reportType", "reportFormat"):
             if not report_metadata.get(required):
                 raise SalesforceError(f"reportMetadata.{required} is required.")
+        report_metadata = dict(report_metadata)
+        self._normalize_report_type(report_metadata)
         report_format = str(report_metadata["reportFormat"]).upper()
         if report_format not in ("TABULAR", "SUMMARY", "MATRIX", "MULTI_BLOCK"):
             raise SalesforceError(
@@ -233,10 +235,43 @@ class SalesforceClient:
             )
         return result
 
-    def _validate_report_columns(self, report_metadata: dict) -> dict:
+    @staticmethod
+    def _normalize_report_type(report_metadata: dict) -> None:
+        """
+        The Analytics API requires reportType as an object {"type": "<Name>"}; a bare string
+        is accepted for validation but makes Salesforce return an opaque JSON_PARSER_ERROR on
+        write. Normalize a string reportType to the object form in place.
+        """
+        rt = report_metadata.get("reportType")
+        if isinstance(rt, str):
+            report_metadata["reportType"] = {"type": rt}
+
+    @staticmethod
+    def _local_report_columns(report_metadata: dict) -> set:
+        """
+        Column names defined inside the report payload itself, not in the type describe:
+        row-level custom formulas (customDetailFormula, e.g. CDF1) and bucket fields
+        (buckets, e.g. BucketField_*). These are valid detailColumns/groupings/filters even
+        though describe_report_type() never lists them.
+        """
+        local = set(report_metadata.get("customDetailFormula") or {})
+        for b in report_metadata.get("buckets") or []:
+            if isinstance(b, dict):
+                name = b.get("developerName") or b.get("devloperName")
+                if name:
+                    local.add(name)
+        return local
+
+    def _validate_report_columns(
+        self, report_metadata: dict, extra_local_cols: set | None = None
+    ) -> dict:
         """
         Validate reportType, columns, groupings, and filters against the type describe.
         Returns the compact type describe for further use.
+
+        Columns defined inside the payload (customDetailFormula / buckets) are whitelisted,
+        as are any names in extra_local_cols (e.g. formulas defined on an already-saved
+        report that a partial update references but does not re-send).
         """
         report_type = report_metadata["reportType"]
         type_name = report_type.get("type") if isinstance(report_type, dict) else report_type
@@ -254,9 +289,10 @@ class SalesforceClient:
         columns = {
             col["name"]: col for cols in described["columns"].values() for col in cols
         }
+        local_cols = self._local_report_columns(report_metadata) | (extra_local_cols or set())
 
         def check(names: list, where: str) -> None:
-            invalid = [n for n in names if n and n not in columns]
+            invalid = [n for n in names if n and n not in columns and n not in local_cols]
             if invalid:
                 suggestions = {}
                 for name in invalid:
@@ -319,13 +355,39 @@ class SalesforceClient:
         if not isinstance(report_metadata, dict) or not report_metadata:
             raise SalesforceError("report_metadata is required and must be a non-empty object.")
         report_metadata = dict(report_metadata)
+        self._normalize_report_type(report_metadata)
         if any(
             k in report_metadata
             for k in ("detailColumns", "groupingsDown", "groupingsAcross", "reportFilters")
         ):
+            saved = None
             if "reportType" not in report_metadata:
-                report_metadata["reportType"] = self.describe_report(rid).get("reportType")
-            self._validate_report_columns(report_metadata)
+                saved = self.describe_report(rid)
+                report_metadata["reportType"] = saved.get("reportType")
+            # A partial patch may reference formula/bucket columns defined on the *saved*
+            # report rather than in the patch body; whitelist those too so they don't read
+            # as invalid detailColumns/groupings.
+            extra_local = set()
+            names = list(report_metadata.get("detailColumns", []))
+            names += [
+                g.get("name")
+                for g in list(report_metadata.get("groupingsDown", []))
+                + list(report_metadata.get("groupingsAcross", []))
+                if isinstance(g, dict)
+            ]
+            names += [
+                f.get("column")
+                for f in report_metadata.get("reportFilters", [])
+                if isinstance(f, dict)
+            ]
+            if any(isinstance(n, str) and n.startswith("CDF") for n in names) and not (
+                report_metadata.get("customDetailFormula")
+            ):
+                if saved is None:
+                    saved = self.describe_report(rid)
+                extra_local |= set(saved.get("customDetailFormula") or {})
+                extra_local |= self._local_report_columns(saved)
+            self._validate_report_columns(report_metadata, extra_local_cols=extra_local)
         return self._patch(f"/analytics/reports/{rid}", {"reportMetadata": report_metadata})
 
     def delete_report(self, report_id: str) -> dict:
