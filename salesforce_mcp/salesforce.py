@@ -439,6 +439,12 @@ class SalesforceClient:
                 'go under "properties".'
             )
         comp.setdefault("type", "Report")
+        if len(str(comp.get("title") or "")) > 40:
+            raise SalesforceError(
+                f"{where}.title exceeds Salesforce's 40-character limit "
+                f"({len(str(comp['title']))} chars). Shorten it, or put longer text in "
+                '"footer" or "header".'
+            )
         report_id = comp.get("reportId")
         if not report_id:
             raise SalesforceError(f"{where}.reportId is required (an existing report Id).")
