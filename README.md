@@ -2,7 +2,7 @@
 
 An MCP server for your Salesforce org: run SOQL queries, describe sObjects, list all objects, and create reports. Authentication uses the **OAuth 2.0 Client Credentials** flow.
 
-Data access is **read-only** -- SOQL is restricted to `SELECT` (INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected). The one write operation is **create_report**, which is gated to run only when a report is explicitly requested (see [Tools](#tools)).
+Data access is **read-only** -- SOQL is restricted to `SELECT` (INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected). The only write operations are **create_report** and **create_dashboard**, which are gated to run only when a report or dashboard is explicitly requested (see [Tools](#tools)).
 
 Supports two transport modes:
 - **stdio** -- for local use with Claude Desktop
@@ -149,22 +149,62 @@ When `MCP_API_KEY` is not set, all requests pass through without auth -- suitabl
 | **describe_sobject** | Describe one sObject: fields, labels, types, relationships. |
 | **list_objects** | List all sObjects in the org: name, label, custom flag. |
 | **create_report** | Create a new report via the Analytics REST API (`POST /analytics/reports`). **Write operation** -- called only when the user explicitly asks to create a report. |
+| **create_dashboard** | Create a new dashboard via the Analytics REST API (`POST /analytics/dashboards`). **Write operation** -- called only when the user explicitly asks to create a dashboard. |
+
+### Default folders
+
+When `folderId` is omitted, reports go to a public **Claude Reports** folder and dashboards to a public **Claude Dashboards** folder (looked up by `DeveloperName` at create time). Salesforce folders are typed (report vs. dashboard), so there are two. Create them once per org:
+
+```bash
+sf data create record --sobject Folder --values "Name='Claude Reports' DeveloperName='Claude_Reports' AccessType='Public' Type='Report'"
+sf data create record --sobject Folder --values "Name='Claude Dashboards' DeveloperName='Claude_Dashboards' AccessType='Public' Type='Dashboard'"
+```
+
+If the folder is missing, the tool returns an error that includes the command above. An explicit `folderId` in the metadata always takes precedence.
 
 ### create_report
 
-Creates a new report asset in the org. Pass `report_metadata` as the object placed under the request's `reportMetadata` key (`name`, `reportType`, and `reportFormat` are required; `detailColumns` and `folderId` are typical):
+Creates a new report asset in the org. Pass `report_metadata` as the object placed under the request's `reportMetadata` key (`name`, `reportType`, and `reportFormat` are required; `detailColumns` is typical; `folderId` defaults to the Claude Reports folder):
 
 ```json
 {
   "name": "Clay Audience Report",
   "reportType": { "type": "AccountList" },
   "reportFormat": "TABULAR",
-  "detailColumns": ["ACCOUNT.NAME", "ACCOUNT.URL", "ACCOUNT.EMPLOYEES"],
-  "folderId": "00lXXXXXXXXXXXX"
+  "detailColumns": ["ACCOUNT.NAME", "ACCOUNT.URL", "ACCOUNT.EMPLOYEES"]
 }
 ```
 
 This requires the Connected App's run-as user to have permission to create reports in the target folder.
+
+### create_dashboard
+
+Creates a new dashboard asset in the org. Pass `dashboard_metadata` as the full dashboard representation sent as the request body (no wrapper key -- unlike reports). `name` is required; `folderId` defaults to the Claude Dashboards folder; components reference existing report Ids, so create the reports first:
+
+```json
+{
+  "name": "Sales Overview",
+  "components": [
+    {
+      "componentData": {
+        "reportId": "00OXXXXXXXXXXXX",
+        "visualizationType": "Column",
+        "displayUnits": "Auto"
+      },
+      "header": "Opportunities by Stage"
+    }
+  ],
+  "gridLayout": {
+    "rowCount": 10,
+    "numColumns": 9,
+    "widgets": [
+      { "componentIndex": 0, "colIndex": 0, "rowIndex": 0, "colSpan": 3, "rowSpan": 4 }
+    ]
+  }
+}
+```
+
+This requires the Connected App's run-as user to have permission to create dashboards in the target folder ("Create and Customize Dashboards", plus "View Dashboards in Public Folders" as applicable).
 
 ## License
 

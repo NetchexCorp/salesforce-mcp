@@ -8,6 +8,13 @@ from salesforce_mcp.auth import obtain_access_token
 
 API_VERSION = "v62.0"
 
+# Default folders (by DeveloperName) used when no folderId is given to create_report /
+# create_dashboard. Create them once per org:
+#   sf data create record --sobject Folder --values "Name='Claude Reports' DeveloperName='Claude_Reports' AccessType='Public' Type='Report'"
+#   sf data create record --sobject Folder --values "Name='Claude Dashboards' DeveloperName='Claude_Dashboards' AccessType='Public' Type='Dashboard'"
+DEFAULT_REPORT_FOLDER = "Claude_Reports"
+DEFAULT_DASHBOARD_FOLDER = "Claude_Dashboards"
+
 # DML keywords that must not appear in SOQL (read-only)
 _FORBIDDEN_SOQL = re.compile(
     r"\b(INSERT|UPDATE|DELETE|UPSERT|EXECUTE)\b",
@@ -78,19 +85,58 @@ class SalesforceClient:
             )
         return resp.json()
 
+    def _default_folder_id(self, developer_name: str, folder_type: str) -> str:
+        """Resolve a default folder Id by DeveloperName and Type ('Report' or 'Dashboard')."""
+        query = (
+            f"SELECT Id FROM Folder WHERE DeveloperName = '{developer_name}' "
+            f"AND Type = '{folder_type}' LIMIT 1"
+        )
+        encoded = requests.utils.quote(query, safe="")
+        records = self._get(f"/query?q={encoded}").get("records", [])
+        if not records:
+            raise SalesforceError(
+                f"Default {folder_type.lower()} folder '{developer_name}' not found in the org. "
+                f"Create it with: sf data create record --sobject Folder --values "
+                f"\"Name='Claude {folder_type}s' DeveloperName='{developer_name}' "
+                f"AccessType='Public' Type='{folder_type}'\" -- or pass an explicit folderId."
+            )
+        return records[0]["Id"]
+
     def create_report(self, report_metadata: dict) -> dict:
         """
         Create a report via the Analytics REST API (POST /analytics/reports).
 
         report_metadata is the value of the "reportMetadata" key: it must include at least
-        name, reportType, reportFormat, and typically detailColumns and folderId.
+        name, reportType, reportFormat, and typically detailColumns. If folderId is omitted,
+        the default 'Claude_Reports' folder is used.
         """
         if not isinstance(report_metadata, dict) or not report_metadata:
             raise SalesforceError("reportMetadata is required and must be a non-empty object.")
         for required in ("name", "reportType", "reportFormat"):
             if not report_metadata.get(required):
                 raise SalesforceError(f"reportMetadata.{required} is required.")
+        if not report_metadata.get("folderId"):
+            report_metadata["folderId"] = self._default_folder_id(DEFAULT_REPORT_FOLDER, "Report")
         return self._post("/analytics/reports", {"reportMetadata": report_metadata})
+
+    def create_dashboard(self, dashboard_metadata: dict) -> dict:
+        """
+        Create a dashboard via the Analytics REST API (POST /analytics/dashboards).
+
+        dashboard_metadata is the dashboard representation sent as the request body: it must
+        include at least name, and typically components (each referencing an existing report
+        Id) and gridLayout. If folderId is omitted, the default 'Claude_Dashboards' folder
+        is used.
+        """
+        if not isinstance(dashboard_metadata, dict) or not dashboard_metadata:
+            raise SalesforceError("dashboardMetadata is required and must be a non-empty object.")
+        if not dashboard_metadata.get("name"):
+            raise SalesforceError("dashboardMetadata.name is required.")
+        if not dashboard_metadata.get("folderId"):
+            dashboard_metadata["folderId"] = self._default_folder_id(
+                DEFAULT_DASHBOARD_FOLDER, "Dashboard"
+            )
+        return self._post("/analytics/dashboards", dashboard_metadata)
 
     def run_soql(self, query: str) -> dict:
         """Execute a SOQL query (SELECT only)."""

@@ -70,15 +70,15 @@ def create_report(report_metadata: dict[str, Any]) -> str:
     that), and never call it speculatively.
 
     Pass `report_metadata` as the object that goes under the request's "reportMetadata" key.
-    Required fields: name, reportType, reportFormat. Typically also detailColumns and folderId.
+    Required fields: name, reportType, reportFormat. Typically also detailColumns. If folderId
+    is omitted, the report is created in the default public 'Claude Reports' folder.
 
     Example report_metadata:
         {
             "name": "Clay Audience Report",
             "reportType": {"type": "AccountList"},
             "reportFormat": "TABULAR",
-            "detailColumns": ["ACCOUNT.NAME", "ACCOUNT.URL", "ACCOUNT.EMPLOYEES"],
-            "folderId": "00lXXXXXXXXXXXX"
+            "detailColumns": ["ACCOUNT.NAME", "ACCOUNT.URL", "ACCOUNT.EMPLOYEES"]
         }
 
     Returns the created report definition (including its new report Id) as JSON.
@@ -86,6 +86,55 @@ def create_report(report_metadata: dict[str, Any]) -> str:
     try:
         client = get_client()
         result = client.create_report(report_metadata)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def create_dashboard(dashboard_metadata: dict[str, Any]) -> str:
+    """
+    Create a NEW dashboard in Salesforce via the Analytics REST API
+    (POST /services/data/<version>/analytics/dashboards).
+
+    IMPORTANT: Only call this tool when the user has EXPLICITLY asked to create a dashboard in
+    Salesforce. This is a write operation that creates a new dashboard asset in the org. Do not
+    call it to read, query, or explore data (use run_soql / describe_sobject / list_objects for
+    that), and never call it speculatively.
+
+    Pass `dashboard_metadata` as the full dashboard representation sent as the request body
+    (unlike create_report, there is no wrapper key). Required field: name. If folderId is
+    omitted, the dashboard is created in the default public 'Claude Dashboards' folder. Each
+    dashboard component references an existing report Id, so create the reports first (or ask
+    the user for existing report Ids).
+
+    Example dashboard_metadata:
+        {
+            "name": "Sales Overview",
+            "components": [
+                {
+                    "componentData": {
+                        "reportId": "00OXXXXXXXXXXXX",
+                        "visualizationType": "Column",
+                        "displayUnits": "Auto"
+                    },
+                    "header": "Opportunities by Stage"
+                }
+            ],
+            "gridLayout": {
+                "rowCount": 10,
+                "numColumns": 9,
+                "widgets": [
+                    {"componentIndex": 0, "colIndex": 0, "rowIndex": 0, "colSpan": 3, "rowSpan": 4}
+                ]
+            }
+        }
+
+    Returns the created dashboard definition (including its new dashboard Id) as JSON.
+    """
+    try:
+        client = get_client()
+        result = client.create_dashboard(dashboard_metadata)
         return json.dumps(result, default=str)
     except Exception as e:
         return _tool_error(str(e))
