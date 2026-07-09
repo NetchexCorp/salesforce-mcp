@@ -5,7 +5,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from salesforce_mcp.middleware import TIER_READ
+from salesforce_mcp.middleware import TIER_FULL
 from salesforce_mcp.salesforce import get_client
 
 mcp = FastMCP("Salesforce", json_response=True, stateless_http=True)
@@ -20,15 +20,19 @@ def _write_denied(action: str) -> str | None:
     """
     Return an error result if this request's API key is read-only, else None.
 
-    The middleware stores the key's access tier in the ASGI scope state; requests
-    without an HTTP context (local stdio runs) or without configured keys pass.
+    The middleware stamps every HTTP request to /mcp with an access tier (including
+    the no-keys local-dev case), so an HTTP request WITHOUT a tier means the auth
+    layer was bypassed somehow -- fail closed. Only non-HTTP transports (local
+    stdio, where there is no request at all) pass without a tier.
     """
     try:
         request = mcp.get_context().request_context.request
-        tier = request.scope.get("state", {}).get("access_tier")
     except Exception:
+        request = None
+    if request is None:
         return None
-    if tier == TIER_READ:
+    tier = getattr(request, "scope", {}).get("state", {}).get("access_tier")
+    if tier != TIER_FULL:
         return _tool_error(
             f"Permission denied: this API key is read-only, so it cannot {action}. "
             "All read tools (run_soql, run_report, report_to_soql, get_report, "

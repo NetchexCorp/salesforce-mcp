@@ -34,12 +34,19 @@ class ApiKeyMiddleware:
         self.admin_key = os.environ.get("MCP_ADMIN_API_KEY", "").strip()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not (self.read_key or self.admin_key):
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
         path = scope.get("path", "")
         if not path.startswith(self.PROTECTED_PATH):
+            await self.app(scope, receive, send)
+            return
+
+        if not (self.read_key or self.admin_key):
+            # No keys configured (local development): full access. The tier is still
+            # set explicitly so the write gate can fail closed when it is absent.
+            scope.setdefault("state", {})["access_tier"] = TIER_FULL
             await self.app(scope, receive, send)
             return
 
