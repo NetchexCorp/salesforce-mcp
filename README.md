@@ -151,11 +151,13 @@ When `MCP_API_KEY` is not set, all requests pass through without auth -- suitabl
 | **list_report_types** | List report types available in the org (API name + label, grouped by category). |
 | **describe_report_type** | Describe one report type: valid column names for detailColumns/groupings/filters, picklist filter values, and filter operators per data type. |
 | **create_report** | Create a new report via the Analytics REST API (`POST /analytics/reports`). **Write operation** -- called only when the user explicitly asks to create a report. |
-| **get_report** | Fetch a report's saveable metadata (`GET /analytics/reports/<id>/describe`) in the shape accepted by create/update. |
+| **get_report** | Fetch a report's saveable metadata (`GET /analytics/reports/<id>/describe`) in the shape accepted by create/update. Accepts a report Id or any Salesforce URL containing one. |
+| **run_report** | Run a report and return its data (`POST /analytics/reports/<id>`), compacted: grand totals, leaf-level grouped rows, capped detail rows. Accepts Id or URL, plus one-off `metadata_overrides` (e.g. `{"scope": "organization"}` to un-empty a "My records" report without saving). Warns when the ~2000-row sync-run cap truncated the data or when an empty result is likely the integration-user scope trap. |
+| **report_to_soql** | Convert a report definition to SOQL: detail query + (when possible) a GROUP BY aggregate query mirroring the report's groupings/aggregates, with a column mapping, unmapped report-only constructs (bucket fields, custom formulas), and caveats (frozen relative date ranges, unconverted cross filters, "my records" scope). Both queries are test-run with `LIMIT 1` before being returned. |
 | **update_report** | Update an existing report (`PATCH /analytics/reports/<id>`). Partial metadata: only the passed keys change. **Write operation.** |
 | **delete_report** | Permanently delete a report (`DELETE /analytics/reports/<id>`). **Destructive** -- called only on an explicit user request. |
 | **create_dashboard** | Create a new dashboard via the Analytics REST API (`POST /analytics/dashboards`). **Write operation** -- called only when the user explicitly asks to create a dashboard. |
-| **get_dashboard** | Fetch a dashboard's full definition (`GET /analytics/dashboards/<id>/describe`) in the exact shape accepted by create/update. |
+| **get_dashboard** | Fetch a dashboard's full definition (`GET /analytics/dashboards/<id>/describe`) in the exact shape accepted by create/update. Accepts a dashboard Id or any Salesforce URL containing one; each component's `reportId` feeds run_report / report_to_soql. |
 | **update_dashboard** | Update an existing dashboard (`PATCH /analytics/dashboards/<id>`). Passing `components` replaces the whole component set. **Write operation.** |
 | **delete_dashboard** | Permanently delete a dashboard (`DELETE /analytics/dashboards/<id>`). **Destructive** -- called only on an explicit user request. |
 

@@ -171,10 +171,14 @@ def create_report(report_metadata: dict[str, Any]) -> str:
 def get_report(report_id: str) -> str:
     """
     Get a report's saveable metadata (name, reportType, columns, groupings, filters, scope,
-    standardDateFilter, folderId) by Id via GET /analytics/reports/<id>/describe. Read-only.
+    standardDateFilter, folderId) via GET /analytics/reports/<id>/describe. Read-only.
 
-    The result is in the shape accepted by create_report / update_report. Find report Ids
+    report_id accepts a 15/18-char report Id (00O...) OR any Salesforce URL containing one
+    (e.g. https://<org>.lightning.force.com/lightning/r/Report/00O.../view). Find report Ids
     with run_soql: SELECT Id, Name, FolderName FROM Report.
+
+    This returns the report's DEFINITION. To get its DATA use run_report; to get the full
+    underlying data as a query use report_to_soql + run_soql.
     """
     try:
         client = get_client()
@@ -219,6 +223,94 @@ def delete_report(report_id: str) -> str:
     try:
         client = get_client()
         result = client.delete_report(report_id)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def run_report(
+    report_id: str,
+    include_details: bool = True,
+    detail_row_limit: int = 100,
+    metadata_overrides: dict[str, Any] | None = None,
+) -> str:
+    """
+    RUN a report and return its DATA (POST /analytics/reports/<id>?includeDetails=...).
+    Read-only: nothing is saved or modified, including when metadata_overrides is used.
+
+    report_id accepts a 15/18-char report Id (00O...) OR any Salesforce URL containing one.
+
+    Returns compact JSON:
+      - report: name, format, scope, filters actually applied to this run
+      - grandTotals: each aggregate's total (keyed by aggregate label)
+      - groupedRows: one row per leaf group with grouping values + aggregate values
+        (SUMMARY/MATRIX reports; subtotal levels are omitted -- derive them by summing)
+      - detailRows: individual record rows keyed by report column name, capped at
+        detail_row_limit (default 100; set include_details=false to skip detail rows
+        entirely, e.g. when you only need grouped aggregates)
+      - warnings: set whenever the data is partial or suspicious -- READ THEM.
+
+    KNOWN TRAPS this tool detects (check "warnings"):
+      - The sync run API caps results (~2000 detail rows): "allData": false means the
+        numbers are computed from PARTIAL data. For complete data, use report_to_soql and
+        run the generated SOQL via run_soql (which paginates the full data set).
+      - Reports scoped to "My records" (scope "user"), e.g. "My Accounts", run as the API
+        integration user here, so they legitimately return ZERO rows. Fix without touching
+        the saved report by passing metadata_overrides={"scope": "organization"} and, if
+        you need one person's view, an owner filter in reportFilters.
+
+    metadata_overrides applies a partial reportMetadata FOR THIS RUN ONLY. Useful keys:
+    scope, standardDateFilter, reportFilters (REPLACES all filters; get current ones from
+    get_report), reportBooleanFilter, detailColumns, aggregates, groupingsDown/Across,
+    hasDetailRows. Example -- widen a "My accounts" report and narrow the date range:
+        {"scope": "organization",
+         "standardDateFilter": {"column": "CREATED_DATE", "durationValue": "CUSTOM",
+                                "startDate": "2026-01-01", "endDate": null}}
+    """
+    try:
+        client = get_client()
+        result = client.run_report(
+            report_id,
+            include_details=include_details,
+            detail_row_limit=detail_row_limit,
+            metadata_overrides=metadata_overrides,
+        )
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def report_to_soql(report_id: str) -> str:
+    """
+    Convert a report's definition into equivalent SOQL, so the report's underlying data can
+    be pulled IN FULL with run_soql (report runs cap at ~2000 rows; SOQL paginates all
+    rows). Read-only; nothing in the org is modified.
+
+    report_id accepts a 15/18-char report Id (00O...) OR any Salesforce URL containing one.
+
+    Returns JSON:
+      - baseObject: the object to query
+      - soql: detail-level query (the report's columns as SOQL fields, filters as WHERE,
+        custom AND/OR filter logic preserved, sort and row limits applied)
+      - aggregateSoql (grouped reports only): GROUP BY query mirroring the report's
+        groupings (date granularities become CALENDAR_MONTH()/FISCAL_QUARTER()/... pairs)
+        and aggregates (s! -> SUM, a! -> AVG, m! -> MIN, x! -> MAX, RowCount -> COUNT(Id))
+      - columns: reportColumn -> soqlField mapping with label and dataType
+      - unmapped: report columns with NO SOQL equivalent (bucket fields, custom detail
+        formulas) with the reason -- decide whether they matter before trusting the query
+      - caveats: REQUIRED READING. Conversion is best-effort; caveats flag semantic gaps:
+        "My records" scope (no owner filter is generated -- the report author's "my" is not
+        expressible), relative date ranges frozen to today's bounds, cross filters left for
+        you to add as semi-joins (raw definitions returned), reference filters rewritten
+        to <Relationship>.Name, comma-split multi-values.
+
+    Typical flow: report_to_soql -> review caveats/unmapped -> adjust if needed -> run_soql.
+    """
+    try:
+        client = get_client()
+        result = client.report_to_soql(report_id)
         return json.dumps(result, default=str)
     except Exception as e:
         return _tool_error(str(e))
@@ -311,12 +403,17 @@ def create_dashboard(dashboard_metadata: dict[str, Any]) -> str:
 @mcp.tool()
 def get_dashboard(dashboard_id: str) -> str:
     """
-    Get a dashboard's full definition (components, layout, folder) by Id via
+    Get a dashboard's full definition (components, layout, folder) via
     GET /analytics/dashboards/<id>/describe. Read-only.
 
+    dashboard_id accepts a 15/18-char dashboard Id (01Z...) OR any Salesforce URL containing
+    one (e.g. .../lightning/r/Dashboard/01Z.../view). Find dashboard Ids with run_soql:
+    SELECT Id, Title, FolderName FROM Dashboard.
+
     The result is in exactly the shape accepted by create_dashboard / update_dashboard,
-    so use it as a reference or as the base for an update. Find dashboard Ids with
-    run_soql: SELECT Id, Title, FolderName FROM Dashboard.
+    so use it as a reference or as the base for an update. To understand the dashboard's
+    DATA, take each component's reportId and call run_report (component charts/tables are
+    projections of those reports' groupings and aggregates) or report_to_soql.
     """
     try:
         client = get_client()
