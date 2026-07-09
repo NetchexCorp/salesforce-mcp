@@ -2,7 +2,7 @@
 
 An MCP server for your Salesforce org: run SOQL queries, describe sObjects, list all objects, and create reports. Authentication uses the **OAuth 2.0 Client Credentials** flow.
 
-Data access is **read-only** -- SOQL is restricted to `SELECT` (INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected). The only write operations are **create_report**, **create_dashboard**, **update_dashboard**, and **delete_dashboard**, which are gated to run only when explicitly requested (see [Tools](#tools)).
+Data access is **read-only** -- SOQL is restricted to `SELECT` (INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected). The only write operations are the report and dashboard create/update/delete tools, which are gated to run only when explicitly requested (see [Tools](#tools)).
 
 Supports two transport modes:
 - **stdio** -- for local use with Claude Desktop
@@ -151,6 +151,9 @@ When `MCP_API_KEY` is not set, all requests pass through without auth -- suitabl
 | **list_report_types** | List report types available in the org (API name + label, grouped by category). |
 | **describe_report_type** | Describe one report type: valid column names for detailColumns/groupings/filters, picklist filter values, and filter operators per data type. |
 | **create_report** | Create a new report via the Analytics REST API (`POST /analytics/reports`). **Write operation** -- called only when the user explicitly asks to create a report. |
+| **get_report** | Fetch a report's saveable metadata (`GET /analytics/reports/<id>/describe`) in the shape accepted by create/update. |
+| **update_report** | Update an existing report (`PATCH /analytics/reports/<id>`). Partial metadata: only the passed keys change. **Write operation.** |
+| **delete_report** | Permanently delete a report (`DELETE /analytics/reports/<id>`). **Destructive** -- called only on an explicit user request. |
 | **create_dashboard** | Create a new dashboard via the Analytics REST API (`POST /analytics/dashboards`). **Write operation** -- called only when the user explicitly asks to create a dashboard. |
 | **get_dashboard** | Fetch a dashboard's full definition (`GET /analytics/dashboards/<id>/describe`) in the exact shape accepted by create/update. |
 | **update_dashboard** | Update an existing dashboard (`PATCH /analytics/dashboards/<id>`). Passing `components` replaces the whole component set. **Write operation.** |
@@ -183,6 +186,8 @@ Creates a new report asset in the org. Pass `report_metadata` as the object plac
 To make the call one-shottable, the server validates the payload against the report type's describe **before** posting: unknown report types, column names (in `detailColumns`, groupings, or filters), and picklist filter values are rejected with the valid options (and close-match suggestions) in the error message. Salesforce API error bodies are also passed through verbatim so the caller can self-correct. The intended workflow is `list_report_types` -> `describe_report_type` -> `create_report`.
 
 Report column names are report-type-specific (not SOQL field names). Multi-value picklist filters take one filter with comma-separated values (`"value": "Net New,Cross-sell"`). Groupings (`groupingsDown`/`groupingsAcross`, SUMMARY/MATRIX only) take `{"name", "sortOrder", "dateGranularity"}`; aggregates use prefixes (`s!AMOUNT` sum, `a!` avg, `m!` min, `x!` max, plus `RowCount`).
+
+Scope and date range: Salesforce defaults new reports to the author's own records (`"scope": "user"`) and a created-this-week date window -- both of which make the report (and any dashboard built on it) render **empty** for other users, since dashboards run as a fixed user. Unless the caller passes them, the server defaults `scope` to `organization` (when the report type supports it) and widens `standardDateFilter` to All Time (`durationValue: "CUSTOM"` with null dates). `describe_report_type` returns the valid `scope` values per report type.
 
 This requires the Connected App's run-as user to have permission to create reports in the target folder.
 

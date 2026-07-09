@@ -139,9 +139,18 @@ class SalesforceClient:
             data_type: [op.get("name") for op in ops]
             for data_type, ops in rtm.get("dataTypeFilterOperatorMap", {}).items()
         }
+        scope_info = rtm.get("scopeInfo") or {}
+        scopes = {
+            "default": scope_info.get("defaultValue"),
+            "values": [
+                {"value": v.get("value"), "label": v.get("label")}
+                for v in scope_info.get("values", [])
+            ],
+        }
         return {
             "type": report_type.strip(),
             "supportsJoinedFormat": rtm.get("supportsJoinedFormat"),
+            "scopes": scopes,
             "columns": columns,
             "filterOperators": operators,
         }
@@ -194,13 +203,37 @@ class SalesforceClient:
             raise SalesforceError(
                 "reportMetadata.reportFormat must be one of: TABULAR, SUMMARY, MATRIX, MULTI_BLOCK."
             )
-        self._validate_report_columns(report_metadata)
+        described = self._validate_report_columns(report_metadata)
+        # Salesforce defaults new reports to a "my records" scope and a created-this-week
+        # date window, which makes them (and any dashboard on top) look empty for everyone
+        # but the author. Default to org-wide / all-time instead unless the caller chose.
+        scope_values = {v["value"] for v in described.get("scopes", {}).get("values", [])}
+        if "scope" not in report_metadata and "organization" in scope_values:
+            report_metadata["scope"] = "organization"
+        had_date_filter = "standardDateFilter" in report_metadata
         if not report_metadata.get("folderId"):
             report_metadata["folderId"] = self._default_folder_id(DEFAULT_REPORT_FOLDER, "Report")
-        return self._post("/analytics/reports", {"reportMetadata": report_metadata})
+        result = self._post("/analytics/reports", {"reportMetadata": report_metadata})
+        created = result.get("reportMetadata", {})
+        sdf = created.get("standardDateFilter") or {}
+        if not had_date_filter and created.get("id") and (sdf.get("startDate") or sdf.get("endDate")):
+            # Widen the org-imposed default date window to All Time (CUSTOM, no bounds).
+            result = self._patch(
+                f"/analytics/reports/{created['id']}",
+                {"reportMetadata": {"standardDateFilter": {
+                    "column": sdf.get("column"),
+                    "durationValue": "CUSTOM",
+                    "startDate": None,
+                    "endDate": None,
+                }}},
+            )
+        return result
 
-    def _validate_report_columns(self, report_metadata: dict) -> None:
-        """Validate reportType, columns, groupings, and filters against the type describe."""
+    def _validate_report_columns(self, report_metadata: dict) -> dict:
+        """
+        Validate reportType, columns, groupings, and filters against the type describe.
+        Returns the compact type describe for further use.
+        """
         report_type = report_metadata["reportType"]
         type_name = report_type.get("type") if isinstance(report_type, dict) else report_type
         if not type_name:
@@ -244,6 +277,7 @@ class SalesforceClient:
         check([f.get("column") for f in filters], "reportFilters columns")
         for f in filters:
             self._check_picklist_filter(f, columns, str(type_name))
+        return described
 
     @staticmethod
     def _check_picklist_filter(f: dict, columns: dict, type_name: str) -> None:
@@ -268,6 +302,32 @@ class SalesforceClient:
         """Fetch a report's reportMetadata (GET /analytics/reports/<id>/describe)."""
         rid = _valid_id(report_id, "report_id")
         return self._get(f"/analytics/reports/{rid}/describe").get("reportMetadata", {})
+
+    def update_report(self, report_id: str, report_metadata: dict) -> dict:
+        """
+        Update a report via PATCH /analytics/reports/<id>.
+
+        report_metadata may be partial: only the provided keys change (e.g. just
+        {"scope": "organization"} or just standardDateFilter); everything else is kept.
+        Column-bearing fields are validated against the report's type describe.
+        """
+        rid = _valid_id(report_id, "report_id")
+        if not isinstance(report_metadata, dict) or not report_metadata:
+            raise SalesforceError("report_metadata is required and must be a non-empty object.")
+        report_metadata = dict(report_metadata)
+        if any(
+            k in report_metadata
+            for k in ("detailColumns", "groupingsDown", "groupingsAcross", "reportFilters")
+        ):
+            if "reportType" not in report_metadata:
+                report_metadata["reportType"] = self.describe_report(rid).get("reportType")
+            self._validate_report_columns(report_metadata)
+        return self._patch(f"/analytics/reports/{rid}", {"reportMetadata": report_metadata})
+
+    def delete_report(self, report_id: str) -> dict:
+        """Delete a report (DELETE /analytics/reports/<id>)."""
+        rid = _valid_id(report_id, "report_id")
+        return self._delete(f"/analytics/reports/{rid}")
 
     def get_dashboard(self, dashboard_id: str) -> dict:
         """Fetch a dashboard's full saveable representation (GET .../dashboards/<id>/describe)."""

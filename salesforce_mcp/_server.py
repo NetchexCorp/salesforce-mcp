@@ -86,6 +86,9 @@ def describe_report_type(report_type: str) -> str:
     Report column names are NOT SOQL field names (e.g. "ACCOUNT.NAME", not "Name"), so
     ALWAYS call this before create_report and copy column names exactly from the result.
     Use list_report_types to find valid report_type values (e.g. "AccountList").
+
+    Also returns "scopes": the valid values for reportMetadata.scope (e.g. "user" = my
+    records, "organization" = all records) with the org default.
     """
     try:
         client = get_client()
@@ -137,6 +140,14 @@ def create_report(report_metadata: dict[str, Any]) -> str:
                            "dateGranularity": "Month"}],
         "aggregates": ["s!AMOUNT", "RowCount"], ...}
 
+    Scope and date range (the "report looks empty" trap): Salesforce defaults new reports
+    to the author's own records ("scope": "user") and a created-this-week date window,
+    which renders EMPTY for other users and on dashboards (dashboards run as a fixed user).
+    Unless you pass them, this tool defaults scope to "organization" (all records, when the
+    report type supports it) and widens the standard date filter to All Time. Pass "scope"
+    (valid values are in describe_report_type's "scopes") or "standardDateFilter"
+    ({"column", "durationValue", "startDate", "endDate"}) explicitly to override.
+
     Example report_metadata (tabular):
         {
             "name": "Clay Audience Report",
@@ -146,10 +157,68 @@ def create_report(report_metadata: dict[str, Any]) -> str:
         }
 
     Returns the created report definition (including its new report Id) as JSON.
+    Use get_report / update_report / delete_report to inspect, fix, or remove it.
     """
     try:
         client = get_client()
         result = client.create_report(report_metadata)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def get_report(report_id: str) -> str:
+    """
+    Get a report's saveable metadata (name, reportType, columns, groupings, filters, scope,
+    standardDateFilter, folderId) by Id via GET /analytics/reports/<id>/describe. Read-only.
+
+    The result is in the shape accepted by create_report / update_report. Find report Ids
+    with run_soql: SELECT Id, Name, FolderName FROM Report.
+    """
+    try:
+        client = get_client()
+        result = client.describe_report(report_id)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def update_report(report_id: str, report_metadata: dict[str, Any]) -> str:
+    """
+    Update an EXISTING report via PATCH /analytics/reports/<id>.
+
+    IMPORTANT: Only call this when the user has explicitly asked to change a report.
+    This overwrites report settings in the org.
+
+    report_metadata may be PARTIAL: only the keys you pass change, everything else is
+    kept. Common fixes: {"scope": "organization"} to widen from "my records" to all
+    records, or {"standardDateFilter": {"column": "CREATED_DATE", "durationValue":
+    "CUSTOM", "startDate": null, "endDate": null}} for All Time. Columns, groupings, and
+    filters are validated against the report type (same rules as create_report).
+    """
+    try:
+        client = get_client()
+        result = client.update_report(report_id, report_metadata)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def delete_report(report_id: str) -> str:
+    """
+    Permanently DELETE a report by Id (DELETE /analytics/reports/<id>).
+
+    DESTRUCTIVE and not undoable via the API: only call this when the user has explicitly
+    asked to delete this specific report. A report referenced by dashboard components
+    should not be deleted without also fixing the dashboard. Confirm the target with
+    get_report first if there is any ambiguity.
+    """
+    try:
+        client = get_client()
+        result = client.delete_report(report_id)
         return json.dumps(result, default=str)
     except Exception as e:
         return _tool_error(str(e))
