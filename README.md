@@ -148,6 +148,8 @@ When `MCP_API_KEY` is not set, all requests pass through without auth -- suitabl
 | **run_soql** | Execute a SOQL SELECT query. INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected. |
 | **describe_sobject** | Describe one sObject: fields, labels, types, relationships. |
 | **list_objects** | List all sObjects in the org: name, label, custom flag. |
+| **list_report_types** | List report types available in the org (API name + label, grouped by category). |
+| **describe_report_type** | Describe one report type: valid column names for detailColumns/groupings/filters, picklist filter values, and filter operators per data type. |
 | **create_report** | Create a new report via the Analytics REST API (`POST /analytics/reports`). **Write operation** -- called only when the user explicitly asks to create a report. |
 | **create_dashboard** | Create a new dashboard via the Analytics REST API (`POST /analytics/dashboards`). **Write operation** -- called only when the user explicitly asks to create a dashboard. |
 
@@ -171,9 +173,13 @@ Creates a new report asset in the org. Pass `report_metadata` as the object plac
   "name": "Clay Audience Report",
   "reportType": { "type": "AccountList" },
   "reportFormat": "TABULAR",
-  "detailColumns": ["ACCOUNT.NAME", "ACCOUNT.URL", "ACCOUNT.EMPLOYEES"]
+  "detailColumns": ["ACCOUNT.NAME", "URL", "EMPLOYEES"]
 }
 ```
+
+To make the call one-shottable, the server validates the payload against the report type's describe **before** posting: unknown report types, column names (in `detailColumns`, groupings, or filters), and picklist filter values are rejected with the valid options (and close-match suggestions) in the error message. Salesforce API error bodies are also passed through verbatim so the caller can self-correct. The intended workflow is `list_report_types` -> `describe_report_type` -> `create_report`.
+
+Report column names are report-type-specific (not SOQL field names). Multi-value picklist filters take one filter with comma-separated values (`"value": "Net New,Cross-sell"`). Groupings (`groupingsDown`/`groupingsAcross`, SUMMARY/MATRIX only) take `{"name", "sortOrder", "dateGranularity"}`; aggregates use prefixes (`s!AMOUNT` sum, `a!` avg, `m!` min, `x!` max, plus `RowCount`).
 
 This requires the Connected App's run-as user to have permission to create reports in the target folder.
 

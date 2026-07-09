@@ -59,6 +59,43 @@ def list_objects() -> str:
 
 
 @mcp.tool()
+def list_report_types() -> str:
+    """
+    List the report types available in the org, grouped by category. Returns each type's
+    API name (e.g. "AccountList", "OpportunityList") and label. Read-only.
+
+    ALWAYS call this (or describe_report_type, if the type is already known) before
+    create_report so the reportType is valid.
+    """
+    try:
+        client = get_client()
+        result = client.list_report_types()
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def describe_report_type(report_type: str) -> str:
+    """
+    Describe one report type: the exact column names usable in a report's detailColumns,
+    groupings, and filters, grouped by category with label and dataType. Picklist columns
+    include filterValues (the exact values accepted by reportFilters). filterOperators maps
+    each dataType to its valid filter operator names. Read-only.
+
+    Report column names are NOT SOQL field names (e.g. "ACCOUNT.NAME", not "Name"), so
+    ALWAYS call this before create_report and copy column names exactly from the result.
+    Use list_report_types to find valid report_type values (e.g. "AccountList").
+    """
+    try:
+        client = get_client()
+        result = client.describe_report_type(report_type)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
 def create_report(report_metadata: dict[str, Any]) -> str:
     """
     Create a NEW report in Salesforce via the Analytics REST API
@@ -69,16 +106,43 @@ def create_report(report_metadata: dict[str, Any]) -> str:
     call it to read, query, or explore data (use run_soql / describe_sobject / list_objects for
     that), and never call it speculatively.
 
-    Pass `report_metadata` as the object that goes under the request's "reportMetadata" key.
-    Required fields: name, reportType, reportFormat. Typically also detailColumns. If folderId
-    is omitted, the report is created in the default public 'Claude Reports' folder.
+    WORKFLOW (required for a correct call):
+      1. list_report_types -> find the reportType API name.
+      2. describe_report_type(<type>) -> copy exact column names for detailColumns,
+         groupings, and filters, plus picklist filterValues and valid operators.
+      3. create_report with those values.
+    The payload (columns, groupings, filter columns, picklist filter values) is validated
+    against the report type describe before anything is sent to Salesforce; invalid input
+    returns an error listing valid options.
 
-    Example report_metadata:
+    Pass `report_metadata` as the object that goes under the request's "reportMetadata" key.
+    Required fields: name, reportType, reportFormat (TABULAR | SUMMARY | MATRIX). Typically
+    also detailColumns. If folderId is omitted, the report is created in the default public
+    'Claude Reports' folder.
+
+    Filters: reportFilters is a list of {"column", "operator", "value"}. For multiple
+    picklist values (OR), pass ONE filter with comma-separated values, e.g.
+    {"column": "TYPE", "operator": "equals", "value": "Net New,New Business"} -- do NOT
+    create one filter per value (multiple filters are ANDed via reportBooleanFilter).
+
+    Groupings (SUMMARY/MATRIX only): groupingsDown / groupingsAcross is a list of
+    {"name": <column>, "sortOrder": "Asc"|"Desc", "dateGranularity": <granularity>}.
+    dateGranularity (date columns only): Day, Week, Month, Quarter, Year,
+    FiscalQuarter, FiscalYear. TABULAR reports must NOT have groupings.
+
+    Aggregates: aggregates is a list of strings: "s!<COLUMN>" sum, "a!<COLUMN>" average,
+    "m!<COLUMN>" min, "x!<COLUMN>" max (numeric columns only), plus "RowCount".
+    Example summary report: {"reportFormat": "SUMMARY",
+        "groupingsDown": [{"name": "CREATED_DATE", "sortOrder": "Asc",
+                           "dateGranularity": "Month"}],
+        "aggregates": ["s!AMOUNT", "RowCount"], ...}
+
+    Example report_metadata (tabular):
         {
             "name": "Clay Audience Report",
             "reportType": {"type": "AccountList"},
             "reportFormat": "TABULAR",
-            "detailColumns": ["ACCOUNT.NAME", "ACCOUNT.URL", "ACCOUNT.EMPLOYEES"]
+            "detailColumns": ["ACCOUNT.NAME", "URL", "EMPLOYEES"]
         }
 
     Returns the created report definition (including its new report Id) as JSON.
