@@ -5,3 +5,7 @@ __pycache__/
 venv/
 .env
 .salesforce-mcp-admin-key
+
+# Handoff / release notes (kept local, not tracked)
+HANDOFF_*.md
+RELEASE*.md
