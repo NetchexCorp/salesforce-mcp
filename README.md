@@ -2,7 +2,7 @@
 
 An MCP server for your Salesforce org: run SOQL queries, describe sObjects, list all objects, and create reports. Authentication uses the **OAuth 2.0 Client Credentials** flow.
 
-Data access is **read-only** -- SOQL is restricted to `SELECT` (INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected). The only write operations are **create_report** and **create_dashboard**, which are gated to run only when a report or dashboard is explicitly requested (see [Tools](#tools)).
+Data access is **read-only** -- SOQL is restricted to `SELECT` (INSERT/UPDATE/DELETE/UPSERT/EXECUTE are rejected). The only write operations are **create_report**, **create_dashboard**, **update_dashboard**, and **delete_dashboard**, which are gated to run only when explicitly requested (see [Tools](#tools)).
 
 Supports two transport modes:
 - **stdio** -- for local use with Claude Desktop
@@ -152,6 +152,9 @@ When `MCP_API_KEY` is not set, all requests pass through without auth -- suitabl
 | **describe_report_type** | Describe one report type: valid column names for detailColumns/groupings/filters, picklist filter values, and filter operators per data type. |
 | **create_report** | Create a new report via the Analytics REST API (`POST /analytics/reports`). **Write operation** -- called only when the user explicitly asks to create a report. |
 | **create_dashboard** | Create a new dashboard via the Analytics REST API (`POST /analytics/dashboards`). **Write operation** -- called only when the user explicitly asks to create a dashboard. |
+| **get_dashboard** | Fetch a dashboard's full definition (`GET /analytics/dashboards/<id>/describe`) in the exact shape accepted by create/update. |
+| **update_dashboard** | Update an existing dashboard (`PATCH /analytics/dashboards/<id>`). Passing `components` replaces the whole component set. **Write operation.** |
+| **delete_dashboard** | Permanently delete a dashboard (`DELETE /analytics/dashboards/<id>`). **Destructive** -- called only on an explicit user request. |
 
 ### Default folders
 
@@ -183,34 +186,40 @@ Report column names are report-type-specific (not SOQL field names). Multi-value
 
 This requires the Connected App's run-as user to have permission to create reports in the target folder.
 
-### create_dashboard
+### create_dashboard / update_dashboard
 
-Creates a new dashboard asset in the org. Pass `dashboard_metadata` as the full dashboard representation sent as the request body (no wrapper key -- unlike reports). `name` is required; `folderId` defaults to the Claude Dashboards folder; components reference existing report Ids, so create the reports first:
+Creates (or updates) a dashboard asset in the org. Pass `dashboard_metadata` as the full dashboard representation sent as the request body (no wrapper key -- unlike reports). `name` is required on create; `folderId` defaults to the Claude Dashboards folder; components reference existing report Ids, so create the reports first:
 
 ```json
 {
   "name": "Sales Overview",
   "components": [
     {
-      "componentData": {
-        "reportId": "00OXXXXXXXXXXXX",
+      "reportId": "00OXXXXXXXXXXXX",
+      "header": "Opportunities by Stage",
+      "properties": {
         "visualizationType": "Column",
-        "displayUnits": "Auto"
-      },
-      "header": "Opportunities by Stage"
+        "aggregates": [{ "name": "s!AMOUNT" }],
+        "groupings": [{ "name": "STAGE_NAME", "sortOrder": "Asc" }]
+      }
     }
   ],
-  "gridLayout": {
-    "rowCount": 10,
-    "numColumns": 9,
-    "widgets": [
-      { "componentIndex": 0, "colIndex": 0, "rowIndex": 0, "colSpan": 3, "rowSpan": 4 }
+  "layout": {
+    "gridLayout": true,
+    "numColumns": 12,
+    "rowHeight": 36,
+    "components": [
+      { "column": 0, "row": 0, "colspan": 6, "rowspan": 12 }
     ]
   }
 }
 ```
 
-This requires the Connected App's run-as user to have permission to create dashboards in the target folder ("Create and Customize Dashboards", plus "View Dashboards in Public Folders" as applicable).
+This shape was verified empirically against v62.0 -- it is what `GET /analytics/dashboards/<id>/describe` returns, and it is NOT what some docs suggest. Salesforce's parser **silently drops unknown fields**, so a payload with a top-level `gridLayout`, a `componentData` object, or `colIndex`/`rowSpan`-style layout keys "succeeds" but creates an **empty-shell dashboard with no components**. To make the call one-shottable the server rejects unknown keys up front, validates every component against its report's describe (chart `groupings`/`aggregates` must exist on the report; `FlexTable` `tableColumns` must be report detail columns and can't mix with groupings/aggregates), fills sensible defaults (groupings/aggregates from the report, `tableColumns` from `detailColumns`, an automatic two-across grid when `layout` is omitted), and warns if Salesforce persists fewer components than were sent.
+
+Chart components (`Bar`, `Column`, `Line`, `Donut`, `Pie`, `Funnel`, `Scatter`) plot a report's groupings, so they need a SUMMARY/MATRIX report. `FlexTable` (Lightning table) shows detail columns; `Table` is the classic auto-column table; `Gauge`/`Metric` show a single aggregate. `layout.components` has one `{column, row, colspan, rowspan}` entry per component, matched by index.
+
+This requires the Connected App's run-as user to have permission to create dashboards in the target folder ("Create and Customize Dashboards", plus "View Dashboards in Public Folders" as applicable). Dashboards run as that user, so it also needs field access to the reports' columns.
 
 ## License
 

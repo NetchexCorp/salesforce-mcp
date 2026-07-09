@@ -155,6 +155,60 @@ def create_report(report_metadata: dict[str, Any]) -> str:
         return _tool_error(str(e))
 
 
+_DASHBOARD_SCHEMA_DOC = """
+    SCHEMA (exact; unknown fields are silently DROPPED by Salesforce, which yields an
+    empty-shell dashboard -- this tool rejects unknown keys up front for that reason):
+        {
+            "name": "Sales Overview",                       # required on create
+            "description": "...",                           # optional
+            "folderId": "00l...",                           # optional, defaults to 'Claude Dashboards'
+            "components": [                                 # required, non-empty
+                {
+                    "type": "Report",                       # optional, defaults to "Report"
+                    "reportId": "00O...",                   # required: an EXISTING report Id
+                    "header": "ARR by Stage",               # shown above the widget
+                    "title": "optional subtitle",
+                    "properties": {
+                        "visualizationType": "Column",      # required, see below
+                        "aggregates": [{"name": "s!AMOUNT"}],
+                        "groupings": [{"name": "STAGE_NAME", "sortOrder": "Asc"}]
+                    }
+                }
+            ],
+            "layout": {                                     # optional: omit for an automatic
+                "gridLayout": true,                         # two-across grid
+                "numColumns": 12,
+                "rowHeight": 36,
+                "components": [                             # ONE entry per component, matched
+                    {"column": 0, "row": 0,                 # BY INDEX (not by id/name)
+                     "colspan": 6, "rowspan": 12}
+                ]
+            }
+        }
+
+    visualizationType values and their rules (validated against the report before posting):
+      - Charts (Bar, Column, Line, Donut, Pie, Funnel, Scatter): the report must be
+        SUMMARY/MATRIX. "groupings" names must be groupings OF THE REPORT, and
+        "aggregates" names must be aggregates of the report (e.g. "s!AMOUNT", "RowCount").
+        If omitted, both default to the report's own groupings/first aggregate.
+      - FlexTable (modern table): shows the report's detail columns. Set
+        properties.visualizationProperties.tableColumns to
+        [{"column": "<detail column>", "type": "detail"}, ...] (plain strings also accepted);
+        defaults to all of the report's detailColumns. FlexTable can NOT mix detail columns
+        with groupings/aggregates -- those are forced empty.
+      - Table (classic table): works on any report, auto-selects columns; "groupings"
+        optional.
+      - Gauge / Metric: single-value; give one aggregate, no groupings.
+
+    Things that look right but are WRONG (silently dropped or parser errors):
+      - top-level "gridLayout" -> the layout lives under "layout" (shape above)
+      - component "componentData" object -> component fields are flat (reportId at the
+        component level, chart settings under "properties")
+      - layout entries keyed "colIndex"/"rowIndex"/"colSpan"/"rowSpan"/"componentIndex"
+        -> the keys are "column", "row", "colspan", "rowspan"; order matches components
+"""
+
+
 @mcp.tool()
 def create_dashboard(dashboard_metadata: dict[str, Any]) -> str:
     """
@@ -163,42 +217,79 @@ def create_dashboard(dashboard_metadata: dict[str, Any]) -> str:
 
     IMPORTANT: Only call this tool when the user has EXPLICITLY asked to create a dashboard in
     Salesforce. This is a write operation that creates a new dashboard asset in the org. Do not
-    call it to read, query, or explore data (use run_soql / describe_sobject / list_objects for
-    that), and never call it speculatively.
+    call it to read, query, or explore data, and never call it speculatively.
 
-    Pass `dashboard_metadata` as the full dashboard representation sent as the request body
-    (unlike create_report, there is no wrapper key). Required field: name. If folderId is
-    omitted, the dashboard is created in the default public 'Claude Dashboards' folder. Each
-    dashboard component references an existing report Id, so create the reports first (or ask
-    the user for existing report Ids).
+    WORKFLOW (required for a correct call):
+      1. Create the reports first with create_report (or get existing report Ids) -- every
+         dashboard component references an existing report Id.
+      2. Charts render a report's GROUPINGS, so reports feeding charts must be
+         SUMMARY/MATRIX with the grouping you want to plot.
+      3. Call create_dashboard. The payload is validated against each report's describe
+         before anything is sent; errors list the valid options.
 
-    Example dashboard_metadata:
-        {
-            "name": "Sales Overview",
-            "components": [
-                {
-                    "componentData": {
-                        "reportId": "00OXXXXXXXXXXXX",
-                        "visualizationType": "Column",
-                        "displayUnits": "Auto"
-                    },
-                    "header": "Opportunities by Stage"
-                }
-            ],
-            "gridLayout": {
-                "rowCount": 10,
-                "numColumns": 9,
-                "widgets": [
-                    {"componentIndex": 0, "colIndex": 0, "rowIndex": 0, "colSpan": 3, "rowSpan": 4}
-                ]
-            }
-        }
-
-    Returns the created dashboard definition (including its new dashboard Id) as JSON.
-    """
+    Returns the created dashboard (including its Id) as JSON. Verify the response's
+    "components" is non-empty; a "warning" field is added if any component was dropped.
+    Use get_dashboard / update_dashboard / delete_dashboard to inspect, fix, or remove it.
+    """ + _DASHBOARD_SCHEMA_DOC
     try:
         client = get_client()
         result = client.create_dashboard(dashboard_metadata)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def get_dashboard(dashboard_id: str) -> str:
+    """
+    Get a dashboard's full definition (components, layout, folder) by Id via
+    GET /analytics/dashboards/<id>/describe. Read-only.
+
+    The result is in exactly the shape accepted by create_dashboard / update_dashboard,
+    so use it as a reference or as the base for an update. Find dashboard Ids with
+    run_soql: SELECT Id, Title, FolderName FROM Dashboard.
+    """
+    try:
+        client = get_client()
+        result = client.get_dashboard(dashboard_id)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def update_dashboard(dashboard_id: str, dashboard_metadata: dict[str, Any]) -> str:
+    """
+    Update an EXISTING dashboard via PATCH /analytics/dashboards/<id>.
+
+    IMPORTANT: Only call this when the user has explicitly asked to change a dashboard.
+    This overwrites the dashboard asset in the org.
+
+    Pass only the fields to change: {"name": "..."} renames; passing "components" REPLACES
+    the dashboard's entire component set (send ALL components you want to keep -- fetch the
+    current ones with get_dashboard first -- and a matching "layout"). Same schema and
+    validation as create_dashboard.
+    """ + _DASHBOARD_SCHEMA_DOC
+    try:
+        client = get_client()
+        result = client.update_dashboard(dashboard_id, dashboard_metadata)
+        return json.dumps(result, default=str)
+    except Exception as e:
+        return _tool_error(str(e))
+
+
+@mcp.tool()
+def delete_dashboard(dashboard_id: str) -> str:
+    """
+    Permanently DELETE a dashboard by Id (DELETE /analytics/dashboards/<id>).
+
+    DESTRUCTIVE and not undoable via the API: only call this when the user has explicitly
+    asked to delete this specific dashboard (e.g. cleaning up an empty shell or a failed
+    attempt). Confirm the target with get_dashboard first if there is any ambiguity.
+    """
+    try:
+        client = get_client()
+        result = client.delete_dashboard(dashboard_id)
         return json.dumps(result, default=str)
     except Exception as e:
         return _tool_error(str(e))
