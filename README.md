@@ -31,7 +31,8 @@ Supports two transport modes:
 | `SALESFORCE_LOGIN_HOST` | No | `login.salesforce.com` (default) or your My Domain host |
 | `MCP_HOST` | No | Server bind address (default: `0.0.0.0`) |
 | `MCP_PORT` | No | Server port (default: `8765`) |
-| `MCP_API_KEY` | No | API key for Bearer token auth on the `/mcp` endpoint. When unset, auth is disabled. |
+| `MCP_API_KEY` | No | API key for Bearer token auth on the `/mcp` endpoint. When `MCP_ADMIN_API_KEY` is also set, this key is **read-only**; when it is the only key, it grants full access. When both are unset, auth is disabled. |
+| `MCP_ADMIN_API_KEY` | No | Full-access API key (read + create/update/delete reports and dashboards). Setting it demotes `MCP_API_KEY` to read-only. |
 | `MCP_ALLOWED_HOSTS` | No | Comma-separated allowed Host headers, or `*` to disable DNS rebinding protection (recommended for cloud deployments with API key auth). |
 | `MCP_TRANSPORT` | No | Transport mode when no CLI arg is given (`stdio` or `streamable-http`, default: `stdio`). |
 
@@ -160,6 +161,15 @@ When `MCP_API_KEY` is not set, all requests pass through without auth -- suitabl
 | **get_dashboard** | Fetch a dashboard's full definition (`GET /analytics/dashboards/<id>/describe`) in the exact shape accepted by create/update. Accepts a dashboard Id or any Salesforce URL containing one; each component's `reportId` feeds run_report / report_to_soql. |
 | **update_dashboard** | Update an existing dashboard (`PATCH /analytics/dashboards/<id>`). Passing `components` replaces the whole component set. **Write operation.** |
 | **delete_dashboard** | Permanently delete a dashboard (`DELETE /analytics/dashboards/<id>`). **Destructive** -- called only on an explicit user request. |
+
+### Access tiers
+
+Two API keys map to two access tiers on the same deployment:
+
+- **`MCP_API_KEY` (read-only)**: all read tools work (`run_soql`, `run_report`, `report_to_soql`, `get_report`, `get_dashboard`, describes, lists). The six write tools (`create/update/delete_report`, `create/update/delete_dashboard`) return a permission-denied error.
+- **`MCP_ADMIN_API_KEY` (full)**: everything, including writes.
+
+If only `MCP_API_KEY` is configured, it grants full access (backward compatible with existing single-key deployments). Distribute the read-only key broadly; hand out the admin key only to people who should create or change report/dashboard assets in the org.
 
 ### Default folders
 

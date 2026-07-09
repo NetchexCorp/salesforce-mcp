@@ -5,6 +5,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from salesforce_mcp.middleware import TIER_READ
 from salesforce_mcp.salesforce import get_client
 
 mcp = FastMCP("Salesforce", json_response=True, stateless_http=True)
@@ -13,6 +14,28 @@ mcp = FastMCP("Salesforce", json_response=True, stateless_http=True)
 def _tool_error(message: str) -> str:
     """Format an error message for tool result."""
     return json.dumps({"error": message})
+
+
+def _write_denied(action: str) -> str | None:
+    """
+    Return an error result if this request's API key is read-only, else None.
+
+    The middleware stores the key's access tier in the ASGI scope state; requests
+    without an HTTP context (local stdio runs) or without configured keys pass.
+    """
+    try:
+        request = mcp.get_context().request_context.request
+        tier = request.scope.get("state", {}).get("access_tier")
+    except Exception:
+        return None
+    if tier == TIER_READ:
+        return _tool_error(
+            f"Permission denied: this API key is read-only, so it cannot {action}. "
+            "All read tools (run_soql, run_report, report_to_soql, get_report, "
+            "get_dashboard, describes) remain available. Ask the MCP administrator "
+            "for the full-access key if write access is intended."
+        )
+    return None
 
 
 @mcp.tool()
@@ -159,6 +182,9 @@ def create_report(report_metadata: dict[str, Any]) -> str:
     Returns the created report definition (including its new report Id) as JSON.
     Use get_report / update_report / delete_report to inspect, fix, or remove it.
     """
+    denied = _write_denied("create reports")
+    if denied:
+        return denied
     try:
         client = get_client()
         result = client.create_report(report_metadata)
@@ -202,6 +228,9 @@ def update_report(report_id: str, report_metadata: dict[str, Any]) -> str:
     "CUSTOM", "startDate": null, "endDate": null}} for All Time. Columns, groupings, and
     filters are validated against the report type (same rules as create_report).
     """
+    denied = _write_denied("update reports")
+    if denied:
+        return denied
     try:
         client = get_client()
         result = client.update_report(report_id, report_metadata)
@@ -220,6 +249,9 @@ def delete_report(report_id: str) -> str:
     should not be deleted without also fixing the dashboard. Confirm the target with
     get_report first if there is any ambiguity.
     """
+    denied = _write_denied("delete reports")
+    if denied:
+        return denied
     try:
         client = get_client()
         result = client.delete_report(report_id)
@@ -392,6 +424,9 @@ def create_dashboard(dashboard_metadata: dict[str, Any]) -> str:
     "components" is non-empty; a "warning" field is added if any component was dropped.
     Use get_dashboard / update_dashboard / delete_dashboard to inspect, fix, or remove it.
     """ + _DASHBOARD_SCHEMA_DOC
+    denied = _write_denied("create dashboards")
+    if denied:
+        return denied
     try:
         client = get_client()
         result = client.create_dashboard(dashboard_metadata)
@@ -436,6 +471,9 @@ def update_dashboard(dashboard_id: str, dashboard_metadata: dict[str, Any]) -> s
     current ones with get_dashboard first -- and a matching "layout"). Same schema and
     validation as create_dashboard.
     """ + _DASHBOARD_SCHEMA_DOC
+    denied = _write_denied("update dashboards")
+    if denied:
+        return denied
     try:
         client = get_client()
         result = client.update_dashboard(dashboard_id, dashboard_metadata)
@@ -453,6 +491,9 @@ def delete_dashboard(dashboard_id: str) -> str:
     asked to delete this specific dashboard (e.g. cleaning up an empty shell or a failed
     attempt). Confirm the target with get_dashboard first if there is any ambiguity.
     """
+    denied = _write_denied("delete dashboards")
+    if denied:
+        return denied
     try:
         client = get_client()
         result = client.delete_dashboard(dashboard_id)

@@ -1,9 +1,26 @@
-"""API key authentication middleware for the MCP server."""
+"""API key authentication middleware for the MCP server.
 
+Two access tiers, selected by which API key the client presents:
+
+  MCP_ADMIN_API_KEY  -> "full"  (read + create/update/delete reports and dashboards)
+  MCP_API_KEY        -> "read"  (read-only) when MCP_ADMIN_API_KEY is also set;
+                        "full" when it is the ONLY key (backward compatible with
+                        single-key deployments)
+
+The resolved tier is stored in the ASGI scope state as "access_tier"; write tools
+read it via the MCP request context and refuse to run for "read" requests.
+When no keys are configured at all (local development), everything passes with
+full access.
+"""
+
+import hmac
 import json
 import os
 
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+TIER_FULL = "full"
+TIER_READ = "read"
 
 
 class ApiKeyMiddleware:
@@ -13,10 +30,11 @@ class ApiKeyMiddleware:
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
-        self.api_key = os.environ.get("MCP_API_KEY", "").strip()
+        self.read_key = os.environ.get("MCP_API_KEY", "").strip()
+        self.admin_key = os.environ.get("MCP_ADMIN_API_KEY", "").strip()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not self.api_key:
+        if scope["type"] != "http" or not (self.read_key or self.admin_key):
             await self.app(scope, receive, send)
             return
 
@@ -33,11 +51,22 @@ class ApiKeyMiddleware:
             return
 
         token = auth_value[7:]
-        if token != self.api_key:
+        tier = self._tier_for(token)
+        if tier is None:
             await self._send_401(send, "Invalid API key")
             return
 
+        scope.setdefault("state", {})["access_tier"] = tier
         await self.app(scope, receive, send)
+
+    def _tier_for(self, token: str) -> str | None:
+        """Map a presented token to an access tier, or None if invalid."""
+        if self.admin_key and hmac.compare_digest(token, self.admin_key):
+            return TIER_FULL
+        if self.read_key and hmac.compare_digest(token, self.read_key):
+            # Without a separate admin key there is only one tier: full access.
+            return TIER_READ if self.admin_key else TIER_FULL
+        return None
 
     @staticmethod
     async def _send_401(send: Send, message: str) -> None:
